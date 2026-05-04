@@ -63,6 +63,11 @@ export type TableCellAlign = 'left' | 'right' | 'center';
  */
 export type TableRow = (string | number | { content: string; hAlign?: TableCellAlign })[];
 
+function getCellDisplayWidth(value: string): number {
+	const lines = value.split(/\r?\n/);
+	return Math.max(0, ...lines.map((line) => stringWidth(line)));
+}
+
 /**
  * Configuration options for creating responsive tables
  */
@@ -212,7 +217,9 @@ export class ResponsiveTable {
 		];
 
 		const contentWidths = head.map((_, colIndex) => {
-			const maxLength = Math.max(...allRows.map((row) => stringWidth(String(row[colIndex] ?? ''))));
+			const maxLength = Math.max(
+				...allRows.map((row) => getCellDisplayWidth(String(row[colIndex] ?? ''))),
+			);
 			return maxLength;
 		});
 
@@ -900,6 +907,28 @@ if (import.meta.vitest != null) {
 
 				// Restore original value
 				process.env.COLUMNS = originalColumns;
+			});
+
+			it('should size multiline cells by the widest rendered line', () => {
+				const table = new ResponsiveTable({
+					head: ['Month', 'Models', 'Total'],
+					colAligns: ['left', 'left', 'right'],
+				});
+
+				const originalColumns = process.env.COLUMNS;
+				process.env.COLUMNS = '80';
+
+				try {
+					const models = Array.from({ length: 12 }, (_, index) => `- model-${index}`).join('\n');
+					table.push(['2026-04', models, '20.62M']);
+					const output = table.toString();
+
+					for (const line of output.split('\n')) {
+						expect(stringWidth(line)).toBeLessThanOrEqual(80);
+					}
+				} finally {
+					process.env.COLUMNS = originalColumns;
+				}
 			});
 
 			it('should handle process.stdout.columns fallback when COLUMNS env var is not set', () => {

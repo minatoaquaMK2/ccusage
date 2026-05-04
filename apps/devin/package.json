@@ -1,0 +1,59 @@
+{
+	"name": "@ccusage/devin",
+	"type": "module",
+	"version": "18.0.11",
+	"description": "Usage analysis tool for Devin CLI sessions",
+	"author": "ryoppippi",
+	"license": "MIT",
+	"funding": "https://github.com/ryoppippi/ccusage?sponsor=1",
+	"homepage": "https://github.com/ryoppippi/ccusage#readme",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/ryoppippi/ccusage.git",
+		"directory": "apps/devin"
+	},
+	"bugs": {
+		"url": "https://github.com/ryoppippi/ccusage/issues"
+	},
+	"main": "./dist/index.js",
+	"module": "./dist/index.js",
+	"bin": {
+		"ccusage-devin": "./src/index.ts"
+	},
+	"files": [
+		"dist"
+	],
+	"publishConfig": {
+		"bin": {
+			"ccusage-devin": "./dist/index.js"
+		}
+	},
+	"engines": {
+		"node": ">=20.19.4"
+	},
+	"scripts": {
+		"build": "tsdown",
+		"format": "pnpm run lint --fix",
+		"lint": "eslint --cache .",
+		"prepack": "pnpm run build && clean-pkg-json",
+		"prerelease": "pnpm run lint && pnpm run typecheck && pnpm run build",
+		"start": "bun ./src/index.ts",
+		"test": "TZ=UTC vitest",
+		"typecheck": "tsgo --noEmit"
+	},
+	"devDependencies": {
+		"@ccusage/internal": "workspace:*",
+		"@ccusage/terminal": "workspace:*",
+		"@praha/byethrow": "catalog:runtime",
+		"@ryoppippi/eslint-config": "catalog:lint",
+		"@typescript/native-preview": "catalog:types",
+		"clean-pkg-json": "catalog:release",
+		"eslint": "catalog:lint",
+		"gunshi": "catalog:runtime",
+		"picocolors": "catalog:runtime",
+		"tsdown": "catalog:build",
+		"unplugin-unused": "catalog:build",
+		"valibot": "catalog:runtime",
+		"vitest": "catalog:testing"
+	}
+}

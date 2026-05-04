@@ -443,6 +443,48 @@ importers:
         specifier: catalog:testing
         version: 4.1.2(@types/node@24.5.1)(happy-dom@16.8.1)(vite@7.3.1(@types/node@24.5.1)(jiti@2.6.1)(yaml@2.8.3))
 
+  apps/devin:
+    devDependencies:
+      '@ccusage/internal':
+        specifier: workspace:*
+        version: link:../../packages/internal
+      '@ccusage/terminal':
+        specifier: workspace:*
+        version: link:../../packages/terminal
+      '@praha/byethrow':
+        specifier: catalog:runtime
+        version: 0.6.3
+      '@ryoppippi/eslint-config':
+        specifier: catalog:lint
+        version: 0.4.0(@vue/compiler-sfc@3.5.30)(eslint-plugin-format@2.0.1(eslint@9.35.0(jiti@2.6.1)))(eslint@9.35.0(jiti@2.6.1))(typescript@5.9.2)(vitest@4.1.2(@types/node@24.5.1)(happy-dom@16.8.1)(vite@7.3.1(@types/node@24.5.1)(jiti@2.6.1)(yaml@2.8.3)))
+      '@typescript/native-preview':
+        specifier: catalog:types
+        version: 7.0.0-dev.20260107.1
+      clean-pkg-json:
+        specifier: catalog:release
+        version: 1.3.0
+      eslint:
+        specifier: catalog:lint
+        version: 9.35.0(jiti@2.6.1)
+      gunshi:
+        specifier: catalog:runtime
+        version: 0.26.3
+      picocolors:
+        specifier: catalog:runtime
+        version: 1.1.1
+      tsdown:
+        specifier: catalog:build
+        version: 0.16.6(@typescript/native-preview@7.0.0-dev.20260107.1)(publint@0.3.12)(synckit@0.11.12)(typescript@5.9.2)(unplugin-unused@0.5.3)
+      unplugin-unused:
+        specifier: catalog:build
+        version: 0.5.3
+      valibot:
+        specifier: catalog:runtime
+        version: 1.1.0(typescript@5.9.2)
+      vitest:
+        specifier: catalog:testing
+        version: 4.1.2(@types/node@24.5.1)(happy-dom@16.8.1)(vite@7.3.1(@types/node@24.5.1)(jiti@2.6.1)(yaml@2.8.3))
+
   apps/mcp:
     dependencies:
       '@ccusage/codex':
