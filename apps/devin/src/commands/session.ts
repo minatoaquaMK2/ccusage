@@ -5,16 +5,16 @@ import pc from 'picocolors';
 import {
 	addCreditEventToSummary,
 	addEventToSummary,
-	cacheTokens,
 	createEmptySummary,
+	formatEstimatedCost,
 	formatModelSummary,
-	formatTokenCount,
+	getLocalTimezone,
 	modelsToRecord,
 } from '../command-utils.ts';
 import { loadDevinUsageEvents } from '../data-loader.ts';
-import { log } from '../logger.ts';
+import { log, logger } from '../logger.ts';
 
-const TABLE_COLUMN_COUNT = 9;
+const TABLE_COLUMN_COUNT = 10;
 
 type SessionSummary = ReturnType<typeof createEmptySummary> & {
 	sessionId: string;
@@ -79,6 +79,7 @@ function calculateSessionTotals(rows: SessionSummary[]): UsageTotals {
 			totals.outputTokens += row.outputTokens;
 			totals.totalTokens += row.totalTokens;
 			totals.credits += row.credits;
+			totals.estimatedCostUSD += row.estimatedCostUSD;
 			totals.requests += row.requests;
 			return totals;
 		},
@@ -89,6 +90,7 @@ function calculateSessionTotals(rows: SessionSummary[]): UsageTotals {
 			outputTokens: 0,
 			totalTokens: 0,
 			credits: 0,
+			estimatedCostUSD: 0,
 			requests: 0,
 		},
 	);
@@ -152,6 +154,7 @@ export const sessionCommand = define({
 							cacheReadInputTokens: row.cacheReadInputTokens,
 							totalTokens: row.totalTokens,
 							credits: row.credits,
+							estimatedCostUSD: row.estimatedCostUSD,
 							requests: row.requests,
 							models: modelsToRecord(row.models),
 						})),
@@ -164,14 +167,36 @@ export const sessionCommand = define({
 			return;
 		}
 
-		log('\nDevin Token Usage Report - Sessions\n');
+		logger.box(`Devin Token Usage Report - Sessions (Timezone: ${getLocalTimezone()})`);
 
 		const table: ResponsiveTable = new ResponsiveTable({
-			head: ['Session', 'Models', 'In', 'Out', 'Cache', 'Total', 'Credits', 'Reqs', 'Last'],
-			colAligns: ['left', 'left', 'right', 'right', 'right', 'right', 'right', 'right', 'left'],
-			compactHead: ['Session', 'Models', 'Total', 'Credits', 'Reqs'],
-			compactColAligns: ['left', 'left', 'right', 'right', 'right'],
-			compactThreshold: 140,
+			head: [
+				'Session',
+				'Models',
+				'Input',
+				'Output',
+				'Cache Create',
+				'Cache Read',
+				'Total Tokens',
+				'Credits',
+				'Cost (USD)',
+				'Last Activity',
+			],
+			colAligns: [
+				'left',
+				'left',
+				'right',
+				'right',
+				'right',
+				'right',
+				'right',
+				'right',
+				'right',
+				'left',
+			],
+			compactHead: ['Session', 'Models', 'Input', 'Output', 'Credits', 'Cost (USD)'],
+			compactColAligns: ['left', 'left', 'right', 'right', 'right', 'right'],
+			compactThreshold: 100,
 			forceCompact: Boolean(ctx.values.compact),
 			style: { head: ['cyan'] },
 		});
@@ -182,12 +207,13 @@ export const sessionCommand = define({
 			table.push([
 				displayTitle,
 				formatModelSummary(data.models),
-				formatTokenCount(data.inputTokens),
-				formatTokenCount(data.outputTokens),
-				formatTokenCount(cacheTokens(data)),
-				formatTokenCount(data.totalTokens),
+				formatNumber(data.inputTokens),
+				formatNumber(data.outputTokens),
+				formatNumber(data.cacheCreationInputTokens),
+				formatNumber(data.cacheReadInputTokens),
+				formatNumber(data.totalTokens),
 				formatNumber(data.credits),
-				formatNumber(data.requests),
+				formatEstimatedCost(data.estimatedCostUSD),
 				data.lastActivity.split('T')[0] ?? data.lastActivity,
 			]);
 		}
@@ -196,20 +222,21 @@ export const sessionCommand = define({
 		table.push([
 			pc.yellow('Total'),
 			'',
-			pc.yellow(formatTokenCount(totals.inputTokens)),
-			pc.yellow(formatTokenCount(totals.outputTokens)),
-			pc.yellow(formatTokenCount(cacheTokens(totals))),
-			pc.yellow(formatTokenCount(totals.totalTokens)),
+			pc.yellow(formatNumber(totals.inputTokens)),
+			pc.yellow(formatNumber(totals.outputTokens)),
+			pc.yellow(formatNumber(totals.cacheCreationInputTokens)),
+			pc.yellow(formatNumber(totals.cacheReadInputTokens)),
+			pc.yellow(formatNumber(totals.totalTokens)),
 			pc.yellow(formatNumber(totals.credits)),
-			pc.yellow(formatNumber(totals.requests)),
+			pc.yellow(formatEstimatedCost(totals.estimatedCostUSD)),
 			'',
 		]);
 
 		log(table.toString());
 
 		if (table.isCompactMode()) {
-			log('\nRunning in Compact Mode');
-			log('Use --json to see separate cache creation/read metrics and full session fields');
+			logger.info('\nRunning in Compact Mode');
+			logger.info('Expand terminal width to see cache metrics and full session fields');
 		}
 	},
 });

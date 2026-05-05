@@ -1,5 +1,6 @@
 import type { CreditUsageEvent, ModelUsage, TokenUsageEvent, UsageTotals } from './_types.ts';
-import { formatNumber } from '@ccusage/terminal/table';
+import { formatCurrency } from '@ccusage/terminal/table';
+import { calculateEstimatedCostUSD, formatDevinModelName } from './pricing.ts';
 
 export type UsageSummary = UsageTotals & {
 	models: Map<string, ModelUsage>;
@@ -18,17 +19,21 @@ export function createEmptySummary(): UsageSummary {
 		outputTokens: 0,
 		totalTokens: 0,
 		credits: 0,
+		estimatedCostUSD: 0,
 		requests: 0,
 		models: new Map(),
 	};
 }
 
 export function addEventToSummary(summary: UsageSummary, event: TokenUsageEvent): void {
+	const estimatedCostUSD = calculateEstimatedCostUSD(event.model, event);
+
 	summary.inputTokens += event.inputTokens;
 	summary.cacheCreationInputTokens += event.cacheCreationInputTokens;
 	summary.cacheReadInputTokens += event.cacheReadInputTokens;
 	summary.outputTokens += event.outputTokens;
 	summary.totalTokens += event.totalTokens;
+	summary.estimatedCostUSD += estimatedCostUSD;
 	summary.requests += 1;
 
 	const existing = summary.models.get(event.model) ?? {
@@ -38,6 +43,7 @@ export function addEventToSummary(summary: UsageSummary, event: TokenUsageEvent)
 		outputTokens: 0,
 		totalTokens: 0,
 		credits: 0,
+		estimatedCostUSD: 0,
 		requests: 0,
 	};
 
@@ -46,6 +52,7 @@ export function addEventToSummary(summary: UsageSummary, event: TokenUsageEvent)
 	existing.cacheReadInputTokens += event.cacheReadInputTokens;
 	existing.outputTokens += event.outputTokens;
 	existing.totalTokens += event.totalTokens;
+	existing.estimatedCostUSD += estimatedCostUSD;
 	existing.requests += 1;
 
 	summary.models.set(event.model, existing);
@@ -93,6 +100,7 @@ export function calculateTotals(rows: UsageSummary[]): UsageTotals {
 			totals.outputTokens += row.outputTokens;
 			totals.totalTokens += row.totalTokens;
 			totals.credits += row.credits;
+			totals.estimatedCostUSD += row.estimatedCostUSD;
 			totals.requests += row.requests;
 			return totals;
 		},
@@ -103,6 +111,7 @@ export function calculateTotals(rows: UsageSummary[]): UsageTotals {
 			outputTokens: 0,
 			totalTokens: 0,
 			credits: 0,
+			estimatedCostUSD: 0,
 			requests: 0,
 		},
 	);
@@ -112,37 +121,30 @@ export function modelsToRecord(models: Map<string, ModelUsage>): Record<string, 
 	return Object.fromEntries(models.entries());
 }
 
-function formatModelName(modelName: string): string {
-	const claudeMatch = modelName.match(/^claude-(\w+)-(.+)$/);
-	if (claudeMatch?.[1] != null && claudeMatch[2] != null) {
-		return `${claudeMatch[1]}-${claudeMatch[2]}`;
-	}
-	return modelName;
-}
-
 export function formatModelSummary(models: Map<string, ModelUsage>): string {
 	const sortedModels = Array.from(models.entries()).sort(
-		([, a], [, b]) => b.totalTokens - a.totalTokens,
+		([modelA, a], [modelB, b]) =>
+			getTotalUsageTokens(b) - getTotalUsageTokens(a) ||
+			formatDevinModelName(modelA).localeCompare(formatDevinModelName(modelB)),
 	);
-	return sortedModels.map(([model]) => `- ${formatModelName(model)}`).join('\n');
+	return sortedModels.map(([model]) => `- ${formatDevinModelName(model)}`).join('\n');
 }
 
-export function formatTokenCount(value: number): string {
-	const absoluteValue = Math.abs(value);
-	if (absoluteValue >= 1_000_000_000) {
-		return `${(value / 1_000_000_000).toFixed(2)}B`;
-	}
-	if (absoluteValue >= 1_000_000) {
-		return `${(value / 1_000_000).toFixed(2)}M`;
-	}
-	return formatNumber(value);
+function getTotalUsageTokens(usage: ModelUsage): number {
+	return (
+		usage.inputTokens +
+		usage.outputTokens +
+		usage.cacheCreationInputTokens +
+		usage.cacheReadInputTokens
+	);
 }
 
-export function cacheTokens(row: {
-	cacheCreationInputTokens: number;
-	cacheReadInputTokens: number;
-}): number {
-	return row.cacheCreationInputTokens + row.cacheReadInputTokens;
+export function formatEstimatedCost(value: number): string {
+	return formatCurrency(value);
+}
+
+export function getLocalTimezone(): string {
+	return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
 
 export function formatLocalDate(timestamp: string): string {
@@ -155,6 +157,19 @@ export function formatLocalDate(timestamp: string): string {
 
 export function formatLocalMonth(timestamp: string): string {
 	return formatLocalDate(timestamp).slice(0, 7);
+}
+
+export function formatDisplayMonth(monthKey: string): string {
+	const [yearStr = '0', monthStr = '1'] = monthKey.split('-');
+	const year = Number.parseInt(yearStr, 10);
+	const month = Number.parseInt(monthStr, 10);
+	const date = new Date(Date.UTC(year, month - 1, 1));
+
+	return new Intl.DateTimeFormat('en-US', {
+		year: 'numeric',
+		month: 'short',
+		timeZone: 'UTC',
+	}).format(date);
 }
 
 if (import.meta.vitest != null) {
@@ -203,8 +218,77 @@ if (import.meta.vitest != null) {
 
 			expect(rows).toHaveLength(1);
 			expect(rows[0]?.credits).toBe(48);
+			expect(rows[0]?.estimatedCostUSD).toBe(0);
 			expect(rows[0]?.requests).toBe(1);
 			expect(rows[0]?.totalTokens).toBe(150);
+		});
+
+		it('adds estimated token cost from usage events', () => {
+			const rows = groupUsage(
+				[
+					{
+						requestId: 'request-1',
+						sessionId: 'session-1',
+						title: 'Session',
+						workingDirectory: '/repo',
+						timestamp: '2026-05-01T00:00:00.000Z',
+						model: 'claude-opus-4-7-medium',
+						inputTokens: 1_000_000,
+						outputTokens: 1_000_000,
+						cacheCreationInputTokens: 0,
+						cacheReadInputTokens: 0,
+						totalTokens: 2_000_000,
+						credits: 0,
+					},
+				],
+				[],
+				() => '2026-05',
+				() => '2026-05',
+			);
+
+			expect(rows[0]?.estimatedCostUSD).toBe(30);
+			expect(rows[0]?.models.get('claude-opus-4-7-medium')?.estimatedCostUSD).toBe(30);
+		});
+	});
+
+	describe('formatModelSummary', () => {
+		it('sorts models by total token usage including cache tokens', () => {
+			const models = new Map<string, ModelUsage>([
+				[
+					'smaller-visible-total',
+					{
+						inputTokens: 100,
+						cacheCreationInputTokens: 0,
+						cacheReadInputTokens: 10_000,
+						outputTokens: 100,
+						totalTokens: 200,
+						credits: 0,
+						estimatedCostUSD: 0,
+						requests: 1,
+					},
+				],
+				[
+					'larger-visible-total',
+					{
+						inputTokens: 1_000,
+						cacheCreationInputTokens: 0,
+						cacheReadInputTokens: 0,
+						outputTokens: 1_000,
+						totalTokens: 2_000,
+						credits: 0,
+						estimatedCostUSD: 0,
+						requests: 1,
+					},
+				],
+			]);
+
+			expect(formatModelSummary(models)).toBe('- smaller-visible-total\n- larger-visible-total');
+		});
+	});
+
+	describe('formatDisplayMonth', () => {
+		it('formats month keys for display without timezone shifts', () => {
+			expect(formatDisplayMonth('2026-05')).toBe('May 2026');
 		});
 	});
 }

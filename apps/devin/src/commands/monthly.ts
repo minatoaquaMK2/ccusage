@@ -7,18 +7,19 @@ import {
 import { define } from 'gunshi';
 import pc from 'picocolors';
 import {
-	cacheTokens,
 	calculateTotals,
+	formatDisplayMonth,
+	formatEstimatedCost,
 	formatLocalMonth,
 	formatModelSummary,
-	formatTokenCount,
+	getLocalTimezone,
 	groupUsage,
 	modelsToRecord,
 } from '../command-utils.ts';
 import { loadDevinUsageEvents } from '../data-loader.ts';
-import { log } from '../logger.ts';
+import { log, logger } from '../logger.ts';
 
-const TABLE_COLUMN_COUNT = 8;
+const TABLE_COLUMN_COUNT = 9;
 
 export const monthlyCommand = define({
 	name: 'monthly',
@@ -80,6 +81,7 @@ export const monthlyCommand = define({
 							cacheReadInputTokens: row.cacheReadInputTokens,
 							totalTokens: row.totalTokens,
 							credits: row.credits,
+							estimatedCostUSD: row.estimatedCostUSD,
 							requests: row.requests,
 							models: modelsToRecord(row.models),
 						})),
@@ -92,14 +94,24 @@ export const monthlyCommand = define({
 			return;
 		}
 
-		log('\nDevin Token Usage Report - Monthly\n');
+		logger.box(`Devin Token Usage Report - Monthly (Timezone: ${getLocalTimezone()})`);
 
 		const table: ResponsiveTable = new ResponsiveTable({
-			head: ['Month', 'Models', 'In', 'Out', 'Cache', 'Total', 'Credits', 'Reqs'],
-			colAligns: ['left', 'left', 'right', 'right', 'right', 'right', 'right', 'right'],
-			compactHead: ['Month', 'Models', 'Total', 'Credits', 'Reqs'],
-			compactColAligns: ['left', 'left', 'right', 'right', 'right'],
-			compactThreshold: 140,
+			head: [
+				'Month',
+				'Models',
+				'Input',
+				'Output',
+				'Cache Create',
+				'Cache Read',
+				'Total Tokens',
+				'Credits',
+				'Cost (USD)',
+			],
+			colAligns: ['left', 'left', 'right', 'right', 'right', 'right', 'right', 'right', 'right'],
+			compactHead: ['Month', 'Models', 'Input', 'Output', 'Credits', 'Cost (USD)'],
+			compactColAligns: ['left', 'left', 'right', 'right', 'right', 'right'],
+			compactThreshold: 100,
 			forceCompact: Boolean(ctx.values.compact),
 			style: { head: ['cyan'] },
 			dateFormatter: (dateStr: string) => formatDateCompact(dateStr),
@@ -107,14 +119,15 @@ export const monthlyCommand = define({
 
 		for (const data of monthlyData) {
 			table.push([
-				data.key,
+				formatDisplayMonth(data.key),
 				formatModelSummary(data.models),
-				formatTokenCount(data.inputTokens),
-				formatTokenCount(data.outputTokens),
-				formatTokenCount(cacheTokens(data)),
-				formatTokenCount(data.totalTokens),
+				formatNumber(data.inputTokens),
+				formatNumber(data.outputTokens),
+				formatNumber(data.cacheCreationInputTokens),
+				formatNumber(data.cacheReadInputTokens),
+				formatNumber(data.totalTokens),
 				formatNumber(data.credits),
-				formatNumber(data.requests),
+				formatEstimatedCost(data.estimatedCostUSD),
 			]);
 		}
 
@@ -122,19 +135,20 @@ export const monthlyCommand = define({
 		table.push([
 			pc.yellow('Total'),
 			'',
-			pc.yellow(formatTokenCount(totals.inputTokens)),
-			pc.yellow(formatTokenCount(totals.outputTokens)),
-			pc.yellow(formatTokenCount(cacheTokens(totals))),
-			pc.yellow(formatTokenCount(totals.totalTokens)),
+			pc.yellow(formatNumber(totals.inputTokens)),
+			pc.yellow(formatNumber(totals.outputTokens)),
+			pc.yellow(formatNumber(totals.cacheCreationInputTokens)),
+			pc.yellow(formatNumber(totals.cacheReadInputTokens)),
+			pc.yellow(formatNumber(totals.totalTokens)),
 			pc.yellow(formatNumber(totals.credits)),
-			pc.yellow(formatNumber(totals.requests)),
+			pc.yellow(formatEstimatedCost(totals.estimatedCostUSD)),
 		]);
 
 		log(table.toString());
 
 		if (table.isCompactMode()) {
-			log('\nRunning in Compact Mode');
-			log('Use --json to see separate cache creation/read metrics');
+			logger.info('\nRunning in Compact Mode');
+			logger.info('Expand terminal width to see cache metrics and total tokens');
 		}
 	},
 });
