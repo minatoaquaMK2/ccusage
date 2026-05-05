@@ -1,345 +1,404 @@
+import type { LiteLLMModelPricing } from '@ccusage/internal/pricing';
 import type { TokenUsageDelta } from './_types.ts';
+import { LiteLLMPricingFetcher } from '@ccusage/internal/pricing';
+import { Result } from '@praha/byethrow';
+import { prefetchDevinPricing } from './_macro.ts' with { type: 'macro' };
+import { logger } from './logger.ts';
 
-type ModelPricing = {
-	inputTokens: number;
-	cacheCreationInputTokens: number;
-	cacheReadInputTokens: number;
-	outputTokens: number;
-};
+const FREE_MODEL_PRICING_ID = '__free__';
+const PREFETCHED_DEVIN_PRICING = prefetchDevinPricing();
+const DEVIN_PROVIDER_PREFIXES = [
+	'anthropic/',
+	'openai/',
+	'azure/',
+	'openrouter/openai/',
+	'google/',
+	'vertex_ai/',
+];
 
-const FREE_PRICING: ModelPricing = {
-	inputTokens: 0,
-	cacheCreationInputTokens: 0,
-	cacheReadInputTokens: 0,
-	outputTokens: 0,
-};
-
-const ANTHROPIC_OPUS_4_5_PLUS_PRICING: ModelPricing = {
-	inputTokens: 5,
-	cacheCreationInputTokens: 6.25,
-	cacheReadInputTokens: 0.5,
-	outputTokens: 25,
-};
-
-const ANTHROPIC_SONNET_4_PRICING: ModelPricing = {
-	inputTokens: 3,
-	cacheCreationInputTokens: 3.75,
-	cacheReadInputTokens: 0.3,
-	outputTokens: 15,
-};
-
-const ANTHROPIC_HAIKU_4_5_PRICING: ModelPricing = {
-	inputTokens: 1,
-	cacheCreationInputTokens: 1.25,
-	cacheReadInputTokens: 0.1,
-	outputTokens: 5,
-};
-
-const OPENAI_GPT_5_4_PRICING: ModelPricing = {
-	inputTokens: 2.5,
-	cacheCreationInputTokens: 2.5,
-	cacheReadInputTokens: 0.25,
-	outputTokens: 15,
-};
-
-const OPENAI_GPT_5_4_PRIORITY_PRICING: ModelPricing = {
-	inputTokens: 5,
-	cacheCreationInputTokens: 5,
-	cacheReadInputTokens: 0.5,
-	outputTokens: 30,
-};
-
-const OPENAI_GPT_5_4_MINI_PRICING: ModelPricing = {
-	inputTokens: 0.75,
-	cacheCreationInputTokens: 0.75,
-	cacheReadInputTokens: 0.075,
-	outputTokens: 4.5,
-};
-
-const OPENAI_GPT_5_4_MINI_PRIORITY_PRICING: ModelPricing = {
-	inputTokens: 1.5,
-	cacheCreationInputTokens: 1.5,
-	cacheReadInputTokens: 0.15,
-	outputTokens: 9,
-};
-
-const OPENAI_GPT_5_2_PRICING: ModelPricing = {
-	inputTokens: 1.75,
-	cacheCreationInputTokens: 1.75,
-	cacheReadInputTokens: 0.175,
-	outputTokens: 14,
-};
-
-const OPENAI_GPT_5_2_PRIORITY_PRICING: ModelPricing = {
-	inputTokens: 3.5,
-	cacheCreationInputTokens: 3.5,
-	cacheReadInputTokens: 0.35,
-	outputTokens: 28,
-};
-
-const OPENAI_GPT_5_3_CODEX_PRICING: ModelPricing = OPENAI_GPT_5_2_PRICING;
-
-const OPENAI_GPT_5_3_CODEX_PRIORITY_PRICING: ModelPricing = OPENAI_GPT_5_2_PRIORITY_PRICING;
-
-const GOOGLE_GEMINI_3_1_PRO_PRICING: ModelPricing = {
-	inputTokens: 2,
-	cacheCreationInputTokens: 2,
-	cacheReadInputTokens: 0.5,
-	outputTokens: 12,
-};
-
-const GOOGLE_GEMINI_3_FLASH_PRICING: ModelPricing = {
-	inputTokens: 0.5,
-	cacheCreationInputTokens: 0.5,
-	cacheReadInputTokens: 0.05,
-	outputTokens: 3,
-};
-
-const MODEL_NAME_OVERRIDES: Record<string, string> = {
+// Display names taken from the current Devin CLI model cache. In particular,
+// MODEL_PRIVATE_11 resolves to Claude Haiku 4.5 rather than an internal SWE model.
+const DEVIN_MODEL_NAMES: Record<string, string> = {
+	'claude-opus-4-7-medium': 'Claude Opus 4.7 Medium',
+	'claude-opus-4-7-low': 'Claude Opus 4.7 Low',
+	'claude-opus-4-7-high': 'Claude Opus 4.7 High',
+	'claude-opus-4-7-xhigh': 'Claude Opus 4.7 XHigh',
+	'claude-opus-4-7-max': 'Claude Opus 4.7 Max',
+	'claude-opus-4-6-thinking': 'Claude Opus 4.6 Thinking',
+	'claude-opus-4-6': 'Claude Opus 4.6',
+	'claude-opus-4-6-1m': 'Claude Opus 4.6 1M',
+	'claude-opus-4-6-thinking-1m': 'Claude Opus 4.6 Thinking 1M',
 	MODEL_CLAUDE_4_5_OPUS: 'Claude Opus 4.5',
 	MODEL_CLAUDE_4_5_OPUS_THINKING: 'Claude Opus 4.5 Thinking',
-	MODEL_CLAUDE_4_SONNET: 'Claude Sonnet 4',
-	MODEL_CLAUDE_4_SONNET_THINKING: 'Claude Sonnet 4 Thinking',
-	MODEL_GOOGLE_GEMINI_3_0_FLASH_HIGH: 'Gemini 3 Flash High Thinking',
-	MODEL_GOOGLE_GEMINI_3_0_FLASH_LOW: 'Gemini 3 Flash Low Thinking',
-	MODEL_GOOGLE_GEMINI_3_0_FLASH_MEDIUM: 'Gemini 3 Flash Medium Thinking',
-	MODEL_GOOGLE_GEMINI_3_0_FLASH_MINIMAL: 'Gemini 3 Flash Minimal',
-	MODEL_GPT_5_2_HIGH: 'GPT-5.2 High Thinking',
-	MODEL_GPT_5_2_LOW: 'GPT-5.2 Low Thinking',
-	MODEL_GPT_5_2_MEDIUM: 'GPT-5.2 Medium Thinking',
-	MODEL_GPT_5_2_NONE: 'GPT-5.2 No Thinking',
-	MODEL_GPT_5_2_XHIGH: 'GPT-5.2 XHigh Thinking',
+	'claude-sonnet-4-6-thinking': 'Claude Sonnet 4.6 Thinking',
+	'claude-sonnet-4-6': 'Claude Sonnet 4.6',
+	'claude-sonnet-4-6-1m': 'Claude Sonnet 4.6 1M',
+	'claude-sonnet-4-6-thinking-1m': 'Claude Sonnet 4.6 Thinking 1M',
+	MODEL_PRIVATE_11: 'Claude Haiku 4.5',
 	MODEL_PRIVATE_2: 'Claude Sonnet 4.5',
 	MODEL_PRIVATE_3: 'Claude Sonnet 4.5 Thinking',
-	MODEL_PRIVATE_11: 'SWE-1.5 (private)',
-	MODEL_SWE_1_5: 'SWE-1.5 Fast',
+	MODEL_CLAUDE_4_SONNET: 'Claude Sonnet 4',
+	MODEL_CLAUDE_4_SONNET_THINKING: 'Claude Sonnet 4 Thinking',
+	'swe-1-6': 'SWE-1.6',
+	'swe-1-6-fast': 'SWE-1.6 Fast',
 	MODEL_SWE_1_5_SLOW: 'SWE-1.5',
+	MODEL_SWE_1_5: 'SWE-1.5 Fast',
+	'gpt-5-4-none': 'GPT-5.4 No Thinking',
+	'gpt-5-4-low': 'GPT-5.4 Low Thinking',
+	'gpt-5-4-medium': 'GPT-5.4 Medium Thinking',
+	'gpt-5-4-high': 'GPT-5.4 High Thinking',
+	'gpt-5-4-xhigh': 'GPT-5.4 XHigh Thinking',
+	'gpt-5-4-none-priority': 'GPT-5.4 No Thinking Fast',
+	'gpt-5-4-low-priority': 'GPT-5.4 Low Thinking Fast',
+	'gpt-5-4-medium-priority': 'GPT-5.4 Medium Thinking Fast',
+	'gpt-5-4-high-priority': 'GPT-5.4 High Thinking Fast',
+	'gpt-5-4-xhigh-priority': 'GPT-5.4 XHigh Thinking Fast',
+	'gpt-5-4-mini-low': 'GPT-5.4 Mini Low Thinking',
+	'gpt-5-4-mini-medium': 'GPT-5.4 Mini Medium Thinking',
+	'gpt-5-4-mini-high': 'GPT-5.4 Mini High Thinking',
+	'gpt-5-4-mini-xhigh': 'GPT-5.4 Mini XHigh Thinking',
+	'gpt-5-3-codex-low': 'GPT-5.3-Codex Low',
+	'gpt-5-3-codex-medium': 'GPT-5.3-Codex Medium',
+	'gpt-5-3-codex-high': 'GPT-5.3-Codex High',
+	'gpt-5-3-codex-xhigh': 'GPT-5.3-Codex X-High',
+	'gpt-5-3-codex-low-priority': 'GPT-5.3-Codex Low Fast',
+	'gpt-5-3-codex-medium-priority': 'GPT-5.3-Codex Medium Fast',
+	'gpt-5-3-codex-high-priority': 'GPT-5.3-Codex High Fast',
+	'gpt-5-3-codex-xhigh-priority': 'GPT-5.3-Codex XHigh Fast',
+	MODEL_GPT_5_2_NONE: 'GPT-5.2 No Thinking',
+	MODEL_GPT_5_2_LOW: 'GPT-5.2 Low Thinking',
+	MODEL_GPT_5_2_MEDIUM: 'GPT-5.2 Medium Thinking',
+	MODEL_GPT_5_2_HIGH: 'GPT-5.2 High Thinking',
+	MODEL_GPT_5_2_XHIGH: 'GPT-5.2 XHigh Thinking',
+	'gemini-3-1-pro-low': 'Gemini 3.1 Pro Low Thinking',
+	'gemini-3-1-pro-high': 'Gemini 3.1 Pro High Thinking',
+	MODEL_GOOGLE_GEMINI_3_0_FLASH_MINIMAL: 'Gemini 3 Flash Minimal',
+	MODEL_GOOGLE_GEMINI_3_0_FLASH_LOW: 'Gemini 3 Flash Low',
+	MODEL_GOOGLE_GEMINI_3_0_FLASH_MEDIUM: 'Gemini 3 Flash Medium',
+	MODEL_GOOGLE_GEMINI_3_0_FLASH_HIGH: 'Gemini 3 Flash High',
+};
+const KNOWN_DEVIN_MODEL_IDS = Object.keys(DEVIN_MODEL_NAMES);
+
+const MODEL_PRICING_ALIASES: Record<string, string[]> = {
+	MODEL_CLAUDE_4_5_OPUS: ['claude-opus-4.5', 'claude-opus-4-5'],
+	MODEL_CLAUDE_4_5_OPUS_THINKING: ['claude-opus-4.5', 'claude-opus-4-5'],
+	MODEL_PRIVATE_11: ['claude-haiku-4.5', 'claude-haiku-4-5'],
+	MODEL_PRIVATE_2: ['claude-sonnet-4.5', 'claude-sonnet-4-5'],
+	MODEL_PRIVATE_3: ['claude-sonnet-4.5', 'claude-sonnet-4-5'],
+	MODEL_CLAUDE_4_SONNET: ['claude-sonnet-4', 'claude-sonnet-4-20250514'],
+	MODEL_CLAUDE_4_SONNET_THINKING: ['claude-sonnet-4', 'claude-sonnet-4-20250514'],
+	MODEL_GPT_5_2_NONE: ['gpt-5.2', 'gpt-5-2'],
+	MODEL_GPT_5_2_LOW: ['gpt-5.2', 'gpt-5-2'],
+	MODEL_GPT_5_2_MEDIUM: ['gpt-5.2', 'gpt-5-2'],
+	MODEL_GPT_5_2_HIGH: ['gpt-5.2', 'gpt-5-2'],
+	MODEL_GPT_5_2_XHIGH: ['gpt-5.2', 'gpt-5-2'],
+	MODEL_GOOGLE_GEMINI_3_0_FLASH_MINIMAL: ['gemini-3-flash', 'gemini-3.0-flash'],
+	MODEL_GOOGLE_GEMINI_3_0_FLASH_LOW: ['gemini-3-flash', 'gemini-3.0-flash'],
+	MODEL_GOOGLE_GEMINI_3_0_FLASH_MEDIUM: ['gemini-3-flash', 'gemini-3.0-flash'],
+	MODEL_GOOGLE_GEMINI_3_0_FLASH_HIGH: ['gemini-3-flash', 'gemini-3.0-flash'],
 };
 
-function formatSuffix(value: string): string {
-	return value
-		.split('-')
-		.filter(Boolean)
-		.map((part) => {
-			if (part === '1m') {
-				return '1M';
-			}
-			if (part === 'xhigh') {
-				return 'XHigh';
-			}
-			return `${part[0]?.toUpperCase() ?? ''}${part.slice(1)}`;
-		})
-		.join(' ');
-}
+export type DevinPricingSourceOptions = {
+	offline?: boolean;
+	offlineLoader?: () => Promise<Record<string, LiteLLMModelPricing>>;
+};
 
-function formatOpenAIReasoningLevel(level: string): string {
-	if (level === 'none') {
-		return 'No Thinking';
-	}
-	if (level === 'xhigh') {
-		return 'XHigh Thinking';
-	}
-	return `${level[0]?.toUpperCase() ?? ''}${level.slice(1)} Thinking`;
-}
-
-function formatCodexReasoningLevel(level: string): string {
-	if (level === 'xhigh') {
-		return 'XHigh';
-	}
-	return `${level[0]?.toUpperCase() ?? ''}${level.slice(1)}`;
+function uniq(values: string[]): string[] {
+	return Array.from(new Set(values.filter((value) => value.trim() !== '')));
 }
 
 function isFreeDevinModel(modelName: string): boolean {
 	const normalized = modelName.toLowerCase();
+	return normalized.startsWith('swe-') || normalized.startsWith('model_swe_');
+}
+
+function hasNonZeroTokenPricing(pricing: LiteLLMModelPricing): boolean {
 	return (
-		normalized === 'model_private_11' ||
-		normalized.startsWith('swe-') ||
-		normalized.startsWith('model_swe_')
+		(pricing.input_cost_per_token ?? 0) > 0 ||
+		(pricing.output_cost_per_token ?? 0) > 0 ||
+		(pricing.cache_creation_input_token_cost ?? 0) > 0 ||
+		(pricing.cache_read_input_token_cost ?? 0) > 0
 	);
 }
 
-function getPricingForModel(modelName: string): ModelPricing | undefined {
-	const normalized = modelName.toLowerCase();
-
-	if (isFreeDevinModel(modelName)) {
-		return FREE_PRICING;
+function createClaudePricingCandidates(modelName: string): string[] {
+	const match = modelName.match(/^claude-(opus|sonnet|haiku)-(\d+)-(\d+)(?:-.+)?$/);
+	if (match?.[1] == null || match[2] == null || match[3] == null) {
+		return [];
 	}
 
-	if (
-		normalized.startsWith('claude-opus-4-7') ||
-		normalized.startsWith('claude-opus-4-6') ||
-		normalized === 'model_claude_4_5_opus' ||
-		normalized === 'model_claude_4_5_opus_thinking'
-	) {
-		return ANTHROPIC_OPUS_4_5_PLUS_PRICING;
+	const family = match[1];
+	const major = match[2];
+	const minor = match[3];
+	const candidates = [`claude-${family}-${major}.${minor}`, `claude-${family}-${major}-${minor}`];
+
+	if (family === 'opus') {
+		candidates.push('claude-opus-4.5', 'claude-opus-4-5');
+	}
+	if (family === 'sonnet') {
+		candidates.push('claude-sonnet-4.5', 'claude-sonnet-4-5');
+	}
+	if (family === 'haiku') {
+		candidates.push('claude-haiku-4.5', 'claude-haiku-4-5');
 	}
 
-	if (
-		normalized.startsWith('claude-sonnet-4-6') ||
-		normalized === 'model_private_2' ||
-		normalized === 'model_private_3' ||
-		normalized === 'model_claude_4_sonnet' ||
-		normalized === 'model_claude_4_sonnet_thinking'
-	) {
-		return ANTHROPIC_SONNET_4_PRICING;
-	}
-
-	if (normalized.startsWith('gpt-5-4-mini')) {
-		return normalized.endsWith('-priority')
-			? OPENAI_GPT_5_4_MINI_PRIORITY_PRICING
-			: OPENAI_GPT_5_4_MINI_PRICING;
-	}
-
-	if (normalized.startsWith('gpt-5-4-')) {
-		return normalized.endsWith('-priority')
-			? OPENAI_GPT_5_4_PRIORITY_PRICING
-			: OPENAI_GPT_5_4_PRICING;
-	}
-
-	if (normalized.startsWith('gpt-5-3-codex-')) {
-		return normalized.endsWith('-priority')
-			? OPENAI_GPT_5_3_CODEX_PRIORITY_PRICING
-			: OPENAI_GPT_5_3_CODEX_PRICING;
-	}
-
-	if (normalized.startsWith('model_gpt_5_2_')) {
-		return OPENAI_GPT_5_2_PRICING;
-	}
-
-	if (normalized.startsWith('gemini-3-1-pro-')) {
-		return GOOGLE_GEMINI_3_1_PRO_PRICING;
-	}
-
-	if (
-		normalized.startsWith('model_google_gemini_3_0_flash_') ||
-		normalized.startsWith('gemini-3-flash-')
-	) {
-		return GOOGLE_GEMINI_3_FLASH_PRICING;
-	}
-
-	if (normalized === 'claude-haiku-4-5') {
-		return ANTHROPIC_HAIKU_4_5_PRICING;
-	}
-
-	return undefined;
+	return candidates;
 }
 
-export function calculateEstimatedCostUSD(modelName: string, usage: TokenUsageDelta): number {
-	const pricing = getPricingForModel(modelName);
-	if (pricing == null) {
-		return 0;
+function createGptPricingCandidates(modelName: string): string[] {
+	const match = modelName.match(
+		/^gpt-(\d+)-(\d+)(?:-(mini|codex))?-(?:none|low|medium|high|xhigh)(?:-priority)?$/,
+	);
+	if (match?.[1] == null || match[2] == null) {
+		return [];
 	}
 
-	return (
-		(usage.inputTokens * pricing.inputTokens +
-			usage.cacheCreationInputTokens * pricing.cacheCreationInputTokens +
-			usage.cacheReadInputTokens * pricing.cacheReadInputTokens +
-			usage.outputTokens * pricing.outputTokens) /
-		1_000_000
-	);
+	const major = match[1];
+	const minor = match[2];
+	const variant = match[3];
+	const suffix = variant == null ? '' : `-${variant}`;
+	const candidates = [`gpt-${major}.${minor}${suffix}`, `gpt-${major}-${minor}${suffix}`];
+
+	if (variant === 'codex' && major === '5' && minor === '3') {
+		candidates.push('gpt-5.2-codex', 'gpt-5-2-codex');
+	}
+
+	if (variant == null) {
+		candidates.push(`gpt-${major}.${minor}`, `gpt-${major}-${minor}`);
+	}
+
+	return candidates;
+}
+
+function createGeminiPricingCandidates(modelName: string): string[] {
+	const proMatch = modelName.match(/^gemini-(\d+)-(\d+)-pro-(?:low|medium|high)$/);
+	if (proMatch?.[1] != null && proMatch[2] != null) {
+		return [
+			`gemini-${proMatch[1]}.${proMatch[2]}-pro`,
+			`gemini-${proMatch[1]}-${proMatch[2]}-pro`,
+			'gemini-3-pro-preview',
+		];
+	}
+
+	return [];
+}
+
+export function resolveDevinPricingCandidates(modelName: string): string[] {
+	return uniq([
+		modelName,
+		...(MODEL_PRICING_ALIASES[modelName] ?? []),
+		...createClaudePricingCandidates(modelName),
+		...createGptPricingCandidates(modelName),
+		...createGeminiPricingCandidates(modelName),
+	]);
 }
 
 export function formatDevinModelName(modelName: string): string {
-	const override = MODEL_NAME_OVERRIDES[modelName];
-	if (override != null) {
-		return override;
+	return DEVIN_MODEL_NAMES[modelName] ?? modelName;
+}
+
+export class DevinPricingSource implements Disposable {
+	private readonly fetcher: LiteLLMPricingFetcher;
+	private readonly resolvedModels = new Map<string, string | null>();
+	private readonly warnedMissingModels = new Set<string>();
+
+	constructor(options: DevinPricingSourceOptions = {}) {
+		this.fetcher = new LiteLLMPricingFetcher({
+			offline: options.offline ?? false,
+			offlineLoader: options.offlineLoader ?? (async () => PREFETCHED_DEVIN_PRICING),
+			logger,
+			providerPrefixes: DEVIN_PROVIDER_PREFIXES,
+		});
 	}
 
-	const claudeMatch = modelName.match(/^claude-(opus|sonnet|haiku)-(\d+)-(\d+)(?:-(.+))?$/);
-	if (claudeMatch?.[1] != null && claudeMatch[2] != null && claudeMatch[3] != null) {
-		const modelFamily = `${claudeMatch[1][0]?.toUpperCase() ?? ''}${claudeMatch[1].slice(1)}`;
-		const suffix = claudeMatch[4] == null ? '' : ` ${formatSuffix(claudeMatch[4])}`;
-		return `Claude ${modelFamily} ${claudeMatch[2]}.${claudeMatch[3]}${suffix}`;
+	[Symbol.dispose](): void {
+		this.fetcher[Symbol.dispose]();
 	}
 
-	const gptMatch = modelName.match(
-		/^gpt-(\d+)-(\d+)(?:-(codex))?-(none|low|medium|high|xhigh)(?:-priority)?$/,
-	);
-	if (gptMatch?.[1] != null && gptMatch[2] != null && gptMatch[4] != null) {
-		const isCodex = gptMatch[3] != null;
-		const family = isCodex
-			? `GPT-${gptMatch[1]}.${gptMatch[2]}-Codex`
-			: `GPT-${gptMatch[1]}.${gptMatch[2]}`;
-		const level = isCodex
-			? formatCodexReasoningLevel(gptMatch[4])
-			: formatOpenAIReasoningLevel(gptMatch[4]);
-		const fastSuffix = modelName.endsWith('-priority') ? ' Fast' : '';
-		return `${family} ${level}${fastSuffix}`;
+	private async resolvePricingModel(modelName: string): Promise<string | null> {
+		if (isFreeDevinModel(modelName)) {
+			return FREE_MODEL_PRICING_ID;
+		}
+
+		if (this.resolvedModels.has(modelName)) {
+			return this.resolvedModels.get(modelName) ?? null;
+		}
+
+		for (const candidate of resolveDevinPricingCandidates(modelName)) {
+			const lookup = await this.fetcher.getModelPricing(candidate);
+			if (Result.isFailure(lookup)) {
+				logger.warn(`Failed to resolve pricing for model ${modelName}:`, lookup.error);
+				this.resolvedModels.set(modelName, null);
+				return null;
+			}
+
+			if (lookup.value != null && hasNonZeroTokenPricing(lookup.value)) {
+				this.resolvedModels.set(modelName, candidate);
+				return candidate;
+			}
+		}
+
+		if (!this.warnedMissingModels.has(modelName)) {
+			logger.warn(`Pricing not found for model ${modelName}; defaulting to zero-cost pricing.`);
+			this.warnedMissingModels.add(modelName);
+		}
+		this.resolvedModels.set(modelName, null);
+		return null;
 	}
 
-	const geminiMatch = modelName.match(/^gemini-(\d+)-(\d+)-pro-(low|medium|high)$/);
-	if (geminiMatch?.[1] != null && geminiMatch[2] != null && geminiMatch[3] != null) {
-		return `Gemini ${geminiMatch[1]}.${geminiMatch[2]} Pro ${formatOpenAIReasoningLevel(geminiMatch[3])}`;
-	}
+	async calculateCost(modelName: string, usage: TokenUsageDelta): Promise<number> {
+		const resolvedModel = await this.resolvePricingModel(modelName);
+		if (resolvedModel == null || resolvedModel === FREE_MODEL_PRICING_ID) {
+			return 0;
+		}
 
-	if (modelName.startsWith('swe-')) {
-		return modelName.replace(/^swe-(\d+)-(\d+)/, 'SWE-$1.$2').replace('-fast', ' Fast');
-	}
+		const result = await this.fetcher.calculateCostFromTokens(
+			{
+				input_tokens: usage.inputTokens,
+				output_tokens: usage.outputTokens,
+				cache_creation_input_tokens: usage.cacheCreationInputTokens,
+				cache_read_input_tokens: usage.cacheReadInputTokens,
+			},
+			resolvedModel,
+		);
 
-	return modelName;
+		if (Result.isFailure(result)) {
+			logger.warn(`Failed to calculate cost for model ${modelName}:`, result.error);
+			return 0;
+		}
+
+		return result.value;
+	}
 }
 
 if (import.meta.vitest != null) {
-	describe('calculateEstimatedCostUSD', () => {
-		it('treats SWE and MODEL_PRIVATE_11 as free Devin models', () => {
+	describe('DevinPricingSource', () => {
+		it('covers the 57 cached Devin model ids', () => {
+			expect(KNOWN_DEVIN_MODEL_IDS).toHaveLength(57);
+		});
+
+		it('calculates cost from LiteLLM pricing for mapped Devin models', async () => {
+			using source = new DevinPricingSource({
+				offline: true,
+				offlineLoader: async () => ({
+					'claude-haiku-4.5': {
+						max_input_tokens: 128_000,
+					},
+					'claude-haiku-4-5': {
+						input_cost_per_token: 1e-6,
+						output_cost_per_token: 5e-6,
+						cache_creation_input_token_cost: 1.25e-6,
+						cache_read_input_token_cost: 1e-7,
+					},
+				}),
+			});
+
+			const cost = await source.calculateCost('MODEL_PRIVATE_11', {
+				inputTokens: 1_000,
+				cacheCreationInputTokens: 100,
+				cacheReadInputTokens: 200,
+				outputTokens: 500,
+				totalTokens: 1_800,
+			});
+
+			expect(cost).toBeCloseTo(1_000e-6 + 100 * 1.25e-6 + 200e-7 + 500 * 5e-6);
+		});
+
+		it('keeps MODEL_PRIVATE_11 billable while MODEL_SWE_* stays free', async () => {
+			using source = new DevinPricingSource({
+				offline: true,
+			});
+
 			const usage = {
+				inputTokens: 1_000,
+				cacheCreationInputTokens: 100,
+				cacheReadInputTokens: 200,
+				outputTokens: 500,
+				totalTokens: 1_800,
+			};
+
+			expect(await source.calculateCost('MODEL_PRIVATE_11', usage)).toBeGreaterThan(0);
+			expect(await source.calculateCost('MODEL_SWE_1_5', usage)).toBe(0);
+		});
+
+		it('treats SWE models as free', async () => {
+			using source = new DevinPricingSource({
+				offline: true,
+				offlineLoader: async () => ({}),
+			});
+
+			const cost = await source.calculateCost('swe-1-6', {
 				inputTokens: 1_000_000,
 				cacheCreationInputTokens: 1_000_000,
 				cacheReadInputTokens: 1_000_000,
 				outputTokens: 1_000_000,
 				totalTokens: 4_000_000,
-			};
+			});
 
-			expect(calculateEstimatedCostUSD('swe-1-6', usage)).toBe(0);
-			expect(calculateEstimatedCostUSD('MODEL_PRIVATE_11', usage)).toBe(0);
+			expect(cost).toBe(0);
 		});
 
-		it('estimates Claude Opus 4.7 token cost with cache pricing', () => {
-			const usage = {
-				inputTokens: 1_000_000,
-				cacheCreationInputTokens: 1_000_000,
-				cacheReadInputTokens: 1_000_000,
-				outputTokens: 1_000_000,
-				totalTokens: 4_000_000,
-			};
+		it('resolves every non-free cached Devin model from offline LiteLLM pricing', async () => {
+			using source = new DevinPricingSource({
+				offline: true,
+			});
 
-			expect(calculateEstimatedCostUSD('claude-opus-4-7-medium', usage)).toBe(36.75);
+			const usage = {
+				inputTokens: 1_000,
+				cacheCreationInputTokens: 100,
+				cacheReadInputTokens: 100,
+				outputTokens: 500,
+				totalTokens: 1_700,
+			};
+			const nonFreeModelIds = KNOWN_DEVIN_MODEL_IDS.filter((modelId) => !isFreeDevinModel(modelId));
+			const costs = await Promise.all(
+				nonFreeModelIds.map(async (modelId) => ({
+					modelId,
+					cost: await source.calculateCost(modelId, usage),
+				})),
+			);
+
+			expect(nonFreeModelIds).toHaveLength(53);
+			expect(costs.filter(({ cost }) => cost > 0)).toHaveLength(nonFreeModelIds.length);
 		});
 
-		it('applies priority pricing to GPT-5.4 models', () => {
-			const usage = {
-				inputTokens: 1_000_000,
+		it('falls back to zero pricing for unknown models', async () => {
+			using source = new DevinPricingSource({
+				offline: true,
+				offlineLoader: async () => ({}),
+			});
+
+			const cost = await source.calculateCost('unknown-model', {
+				inputTokens: 1_000,
 				cacheCreationInputTokens: 0,
-				cacheReadInputTokens: 1_000_000,
-				outputTokens: 1_000_000,
-				totalTokens: 3_000_000,
-			};
+				cacheReadInputTokens: 0,
+				outputTokens: 1_000,
+				totalTokens: 2_000,
+			});
 
-			expect(calculateEstimatedCostUSD('gpt-5-4-high-priority', usage)).toBe(35.5);
-		});
-
-		it('estimates GPT-5.3-Codex and Gemini model token costs', () => {
-			const usage = {
-				inputTokens: 1_000_000,
-				cacheCreationInputTokens: 0,
-				cacheReadInputTokens: 1_000_000,
-				outputTokens: 1_000_000,
-				totalTokens: 3_000_000,
-			};
-
-			expect(calculateEstimatedCostUSD('gpt-5-3-codex-high', usage)).toBe(15.925);
-			expect(calculateEstimatedCostUSD('gemini-3-1-pro-high', usage)).toBe(14.5);
-			expect(calculateEstimatedCostUSD('MODEL_GOOGLE_GEMINI_3_0_FLASH_HIGH', usage)).toBe(3.55);
+			expect(cost).toBe(0);
 		});
 	});
 
 	describe('formatDevinModelName', () => {
-		it('uses Devin model labels for private model ids', () => {
-			expect(formatDevinModelName('MODEL_PRIVATE_11')).toBe('SWE-1.5 (private)');
+		it('uses Devin model labels from the model cache', () => {
+			expect(formatDevinModelName('MODEL_PRIVATE_11')).toBe('Claude Haiku 4.5');
 			expect(formatDevinModelName('MODEL_SWE_1_5')).toBe('SWE-1.5 Fast');
 			expect(formatDevinModelName('gpt-5-3-codex-xhigh-priority')).toBe('GPT-5.3-Codex XHigh Fast');
 			expect(formatDevinModelName('claude-opus-4-6-thinking-1m')).toBe(
 				'Claude Opus 4.6 Thinking 1M',
+			);
+		});
+	});
+
+	describe('resolveDevinPricingCandidates', () => {
+		it('strips Devin model suffixes for LiteLLM lookup candidates', () => {
+			expect(resolveDevinPricingCandidates('gpt-5-3-codex-high-priority')).toContain(
+				'gpt-5.3-codex',
+			);
+			expect(resolveDevinPricingCandidates('claude-opus-4-7-medium')).toContain('claude-opus-4.7');
+			expect(resolveDevinPricingCandidates('MODEL_GOOGLE_GEMINI_3_0_FLASH_HIGH')).toContain(
+				'gemini-3-flash',
 			);
 		});
 	});

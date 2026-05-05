@@ -1,6 +1,14 @@
-import type { CreditUsageEvent, ModelUsage, TokenUsageEvent, UsageTotals } from './_types.ts';
+import type {
+	CreditUsageEvent,
+	ModelUsage,
+	TokenUsageDelta,
+	TokenUsageEvent,
+	UsageTotals,
+} from './_types.ts';
 import { formatCurrency } from '@ccusage/terminal/table';
-import { calculateEstimatedCostUSD, formatDevinModelName } from './pricing.ts';
+import { formatDevinModelName } from './pricing.ts';
+
+export type UsageCostCalculator = (model: string, usage: TokenUsageDelta) => Promise<number>;
 
 export type UsageSummary = UsageTotals & {
 	models: Map<string, ModelUsage>;
@@ -19,21 +27,23 @@ export function createEmptySummary(): UsageSummary {
 		outputTokens: 0,
 		totalTokens: 0,
 		credits: 0,
-		estimatedCostUSD: 0,
+		costUSD: 0,
 		requests: 0,
 		models: new Map(),
 	};
 }
 
-export function addEventToSummary(summary: UsageSummary, event: TokenUsageEvent): void {
-	const estimatedCostUSD = calculateEstimatedCostUSD(event.model, event);
-
+export function addEventToSummary(
+	summary: UsageSummary,
+	event: TokenUsageEvent,
+	costUSD = 0,
+): void {
 	summary.inputTokens += event.inputTokens;
 	summary.cacheCreationInputTokens += event.cacheCreationInputTokens;
 	summary.cacheReadInputTokens += event.cacheReadInputTokens;
 	summary.outputTokens += event.outputTokens;
 	summary.totalTokens += event.totalTokens;
-	summary.estimatedCostUSD += estimatedCostUSD;
+	summary.costUSD += costUSD;
 	summary.requests += 1;
 
 	const existing = summary.models.get(event.model) ?? {
@@ -43,7 +53,7 @@ export function addEventToSummary(summary: UsageSummary, event: TokenUsageEvent)
 		outputTokens: 0,
 		totalTokens: 0,
 		credits: 0,
-		estimatedCostUSD: 0,
+		costUSD: 0,
 		requests: 0,
 	};
 
@@ -52,7 +62,7 @@ export function addEventToSummary(summary: UsageSummary, event: TokenUsageEvent)
 	existing.cacheReadInputTokens += event.cacheReadInputTokens;
 	existing.outputTokens += event.outputTokens;
 	existing.totalTokens += event.totalTokens;
-	existing.estimatedCostUSD += estimatedCostUSD;
+	existing.costUSD += costUSD;
 	existing.requests += 1;
 
 	summary.models.set(event.model, existing);
@@ -62,18 +72,19 @@ export function addCreditEventToSummary(summary: UsageSummary, event: CreditUsag
 	summary.credits += event.credits;
 }
 
-export function groupUsage(
+export async function groupUsage(
 	events: TokenUsageEvent[],
 	creditEvents: CreditUsageEvent[],
 	getKey: (event: TokenUsageEvent) => string,
 	getCreditKey: (event: CreditUsageEvent) => string,
-): SummaryRow[] {
+	calculateCost: UsageCostCalculator,
+): Promise<SummaryRow[]> {
 	const grouped = new Map<string, UsageSummary>();
 
 	for (const event of events) {
 		const key = getKey(event);
 		const summary = grouped.get(key) ?? createEmptySummary();
-		addEventToSummary(summary, event);
+		addEventToSummary(summary, event, await calculateCost(event.model, event));
 		grouped.set(key, summary);
 	}
 
@@ -100,7 +111,7 @@ export function calculateTotals(rows: UsageSummary[]): UsageTotals {
 			totals.outputTokens += row.outputTokens;
 			totals.totalTokens += row.totalTokens;
 			totals.credits += row.credits;
-			totals.estimatedCostUSD += row.estimatedCostUSD;
+			totals.costUSD += row.costUSD;
 			totals.requests += row.requests;
 			return totals;
 		},
@@ -111,71 +122,35 @@ export function calculateTotals(rows: UsageSummary[]): UsageTotals {
 			outputTokens: 0,
 			totalTokens: 0,
 			credits: 0,
-			estimatedCostUSD: 0,
+			costUSD: 0,
 			requests: 0,
 		},
 	);
 }
 
 export function modelsToRecord(models: Map<string, ModelUsage>): Record<string, ModelUsage> {
-	return Object.fromEntries(models.entries());
+	return Object.fromEntries(
+		Array.from(models.entries()).sort(([modelA], [modelB]) =>
+			formatDevinModelName(modelA).localeCompare(formatDevinModelName(modelB)),
+		),
+	);
 }
 
 export function formatModelSummary(models: Map<string, ModelUsage>): string {
-	const sortedModels = Array.from(models.entries()).sort(
-		([modelA, a], [modelB, b]) =>
-			getTotalUsageTokens(b) - getTotalUsageTokens(a) ||
-			formatDevinModelName(modelA).localeCompare(formatDevinModelName(modelB)),
+	const sortedModels = Array.from(models.entries()).sort(([modelA], [modelB]) =>
+		formatDevinModelName(modelA).localeCompare(formatDevinModelName(modelB)),
 	);
 	return sortedModels.map(([model]) => `- ${formatDevinModelName(model)}`).join('\n');
-}
-
-function getTotalUsageTokens(usage: ModelUsage): number {
-	return (
-		usage.inputTokens +
-		usage.outputTokens +
-		usage.cacheCreationInputTokens +
-		usage.cacheReadInputTokens
-	);
 }
 
 export function formatEstimatedCost(value: number): string {
 	return formatCurrency(value);
 }
 
-export function getLocalTimezone(): string {
-	return Intl.DateTimeFormat().resolvedOptions().timeZone;
-}
-
-export function formatLocalDate(timestamp: string): string {
-	return new Intl.DateTimeFormat('en-CA', {
-		year: 'numeric',
-		month: '2-digit',
-		day: '2-digit',
-	}).format(new Date(timestamp));
-}
-
-export function formatLocalMonth(timestamp: string): string {
-	return formatLocalDate(timestamp).slice(0, 7);
-}
-
-export function formatDisplayMonth(monthKey: string): string {
-	const [yearStr = '0', monthStr = '1'] = monthKey.split('-');
-	const year = Number.parseInt(yearStr, 10);
-	const month = Number.parseInt(monthStr, 10);
-	const date = new Date(Date.UTC(year, month - 1, 1));
-
-	return new Intl.DateTimeFormat('en-US', {
-		year: 'numeric',
-		month: 'short',
-		timeZone: 'UTC',
-	}).format(date);
-}
-
 if (import.meta.vitest != null) {
 	describe('groupUsage', () => {
-		it('counts credits from user prompt events instead of token requests', () => {
-			const rows = groupUsage(
+		it('counts credits from user prompt events instead of token requests', async () => {
+			const rows = await groupUsage(
 				[
 					{
 						requestId: 'request-1',
@@ -188,7 +163,7 @@ if (import.meta.vitest != null) {
 						outputTokens: 50,
 						cacheCreationInputTokens: 10,
 						cacheReadInputTokens: 20,
-						totalTokens: 150,
+						totalTokens: 180,
 						credits: 999,
 					},
 				],
@@ -214,17 +189,18 @@ if (import.meta.vitest != null) {
 				],
 				() => '2026-05',
 				() => '2026-05',
+				async () => 0,
 			);
 
 			expect(rows).toHaveLength(1);
 			expect(rows[0]?.credits).toBe(48);
-			expect(rows[0]?.estimatedCostUSD).toBe(0);
+			expect(rows[0]?.costUSD).toBe(0);
 			expect(rows[0]?.requests).toBe(1);
-			expect(rows[0]?.totalTokens).toBe(150);
+			expect(rows[0]?.totalTokens).toBe(180);
 		});
 
-		it('adds estimated token cost from usage events', () => {
-			const rows = groupUsage(
+		it('adds token cost from usage events', async () => {
+			const rows = await groupUsage(
 				[
 					{
 						requestId: 'request-1',
@@ -244,31 +220,32 @@ if (import.meta.vitest != null) {
 				[],
 				() => '2026-05',
 				() => '2026-05',
+				async () => 30,
 			);
 
-			expect(rows[0]?.estimatedCostUSD).toBe(30);
-			expect(rows[0]?.models.get('claude-opus-4-7-medium')?.estimatedCostUSD).toBe(30);
+			expect(rows[0]?.costUSD).toBe(30);
+			expect(rows[0]?.models.get('claude-opus-4-7-medium')?.costUSD).toBe(30);
 		});
 	});
 
 	describe('formatModelSummary', () => {
-		it('sorts models by total token usage including cache tokens', () => {
+		it('sorts models by display name', () => {
 			const models = new Map<string, ModelUsage>([
 				[
-					'smaller-visible-total',
+					'swe-1-6',
 					{
 						inputTokens: 100,
 						cacheCreationInputTokens: 0,
 						cacheReadInputTokens: 10_000,
 						outputTokens: 100,
-						totalTokens: 200,
+						totalTokens: 10_200,
 						credits: 0,
-						estimatedCostUSD: 0,
+						costUSD: 0,
 						requests: 1,
 					},
 				],
 				[
-					'larger-visible-total',
+					'MODEL_PRIVATE_11',
 					{
 						inputTokens: 1_000,
 						cacheCreationInputTokens: 0,
@@ -276,19 +253,13 @@ if (import.meta.vitest != null) {
 						outputTokens: 1_000,
 						totalTokens: 2_000,
 						credits: 0,
-						estimatedCostUSD: 0,
+						costUSD: 0,
 						requests: 1,
 					},
 				],
 			]);
 
-			expect(formatModelSummary(models)).toBe('- smaller-visible-total\n- larger-visible-total');
-		});
-	});
-
-	describe('formatDisplayMonth', () => {
-		it('formats month keys for display without timezone shifts', () => {
-			expect(formatDisplayMonth('2026-05')).toBe('May 2026');
+			expect(formatModelSummary(models)).toBe('- Claude Haiku 4.5\n- SWE-1.6');
 		});
 	});
 }

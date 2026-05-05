@@ -28,7 +28,7 @@ export type CreditUsageEvent = {
 
 export type ModelUsage = TokenUsageDelta & {
 	credits: number;
-	estimatedCostUSD: number;
+	costUSD: number;
 	requests: number;
 };
 
@@ -43,6 +43,6 @@ export type SessionInfo = {
 
 export type UsageTotals = TokenUsageDelta & {
 	credits: number;
-	estimatedCostUSD: number;
+	costUSD: number;
 	requests: number;
 };

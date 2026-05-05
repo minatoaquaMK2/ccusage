@@ -475,6 +475,9 @@ importers:
       tsdown:
         specifier: catalog:build
         version: 0.16.6(@typescript/native-preview@7.0.0-dev.20260107.1)(publint@0.3.12)(synckit@0.11.12)(typescript@5.9.2)(unplugin-unused@0.5.3)
+      unplugin-macros:
+        specifier: catalog:build
+        version: 0.18.2(@types/node@24.5.1)(jiti@2.6.1)(yaml@2.8.3)
       unplugin-unused:
         specifier: catalog:build
         version: 0.5.3

@@ -9,3 +9,5 @@ const USER_HOME_DIR = homedir();
 export const DEFAULT_DEVIN_DIR = path.join(USER_HOME_DIR, DEFAULT_DEVIN_PATH);
 export const DEVIN_CLI_DIR_NAME = 'cli';
 export const DEVIN_SESSIONS_DB_NAME = 'sessions.db';
+export const DEFAULT_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC';
+export const DEFAULT_LOCALE = 'en-CA';

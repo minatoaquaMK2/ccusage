@@ -52,6 +52,7 @@
 		"gunshi": "catalog:runtime",
 		"picocolors": "catalog:runtime",
 		"tsdown": "catalog:build",
+		"unplugin-macros": "catalog:build",
 		"unplugin-unused": "catalog:build",
 		"valibot": "catalog:runtime",
 		"vitest": "catalog:testing"

@@ -1,0 +1,157 @@
+function safeTimeZone(timezone?: string): string {
+	if (timezone == null || timezone.trim() === '') {
+		return Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC';
+	}
+
+	try {
+		Intl.DateTimeFormat('en-US', { timeZone: timezone });
+		return timezone;
+	} catch {
+		return 'UTC';
+	}
+}
+
+export function toDateKey(timestamp: string, timezone?: string): string {
+	const tz = safeTimeZone(timezone);
+	const date = new Date(timestamp);
+	const formatter = new Intl.DateTimeFormat('en-CA', {
+		year: 'numeric',
+		month: '2-digit',
+		day: '2-digit',
+		timeZone: tz,
+	});
+	return formatter.format(date);
+}
+
+export function normalizeFilterDate(value?: string): string | undefined {
+	if (value == null) {
+		return undefined;
+	}
+
+	const compact = value.replaceAll('-', '').trim();
+	if (!/^\d{8}$/.test(compact)) {
+		throw new Error(`Invalid date format: ${value}. Expected YYYYMMDD or YYYY-MM-DD.`);
+	}
+
+	return `${compact.slice(0, 4)}-${compact.slice(4, 6)}-${compact.slice(6, 8)}`;
+}
+
+export function isWithinRange(dateKey: string, since?: string, until?: string): boolean {
+	const value = dateKey.replaceAll('-', '');
+	const sinceValue = since?.replaceAll('-', '');
+	const untilValue = until?.replaceAll('-', '');
+
+	if (sinceValue != null && value < sinceValue) {
+		return false;
+	}
+
+	if (untilValue != null && value > untilValue) {
+		return false;
+	}
+
+	return true;
+}
+
+export function filterTimestampedByDateRange<T extends { timestamp: string }>(
+	items: T[],
+	timezone?: string,
+	since?: string,
+	until?: string,
+): T[] {
+	return items.filter((item) => isWithinRange(toDateKey(item.timestamp, timezone), since, until));
+}
+
+export function formatDisplayDate(dateKey: string, locale?: string, _timezone?: string): string {
+	const [yearStr = '0', monthStr = '1', dayStr = '1'] = dateKey.split('-');
+	const year = Number.parseInt(yearStr, 10);
+	const month = Number.parseInt(monthStr, 10);
+	const day = Number.parseInt(dayStr, 10);
+	const date = new Date(Date.UTC(year, month - 1, day));
+	const formatter = new Intl.DateTimeFormat(locale ?? 'en-US', {
+		year: 'numeric',
+		month: 'short',
+		day: '2-digit',
+		timeZone: 'UTC',
+	});
+	return formatter.format(date);
+}
+
+export function toMonthKey(timestamp: string, timezone?: string): string {
+	const tz = safeTimeZone(timezone);
+	const date = new Date(timestamp);
+	const formatter = new Intl.DateTimeFormat('en-CA', {
+		year: 'numeric',
+		month: '2-digit',
+		timeZone: tz,
+	});
+	const [year, month] = formatter.format(date).split('-');
+	return `${year}-${month}`;
+}
+
+export function formatDisplayMonth(monthKey: string, locale?: string, _timezone?: string): string {
+	const [yearStr = '0', monthStr = '1'] = monthKey.split('-');
+	const year = Number.parseInt(yearStr, 10);
+	const month = Number.parseInt(monthStr, 10);
+	const date = new Date(Date.UTC(year, month - 1, 1));
+	const formatter = new Intl.DateTimeFormat(locale ?? 'en-US', {
+		year: 'numeric',
+		month: 'short',
+		timeZone: 'UTC',
+	});
+	return formatter.format(date);
+}
+
+export function formatDisplayDateTime(
+	timestamp: string,
+	locale?: string,
+	timezone?: string,
+): string {
+	const tz = safeTimeZone(timezone);
+	const date = new Date(timestamp);
+	const formatter = new Intl.DateTimeFormat(locale ?? 'en-US', {
+		dateStyle: 'short',
+		timeStyle: 'short',
+		timeZone: tz,
+	});
+	return formatter.format(date);
+}
+
+if (import.meta.vitest != null) {
+	describe('normalizeFilterDate', () => {
+		it('accepts dashed and compact dates', () => {
+			expect(normalizeFilterDate('2026-05-01')).toBe('2026-05-01');
+			expect(normalizeFilterDate('20260501')).toBe('2026-05-01');
+		});
+	});
+
+	describe('formatDisplayMonth', () => {
+		it('formats month keys for display without timezone shifts', () => {
+			expect(formatDisplayMonth('2026-05')).toBe('May 2026');
+		});
+	});
+
+	describe('isWithinRange', () => {
+		it('filters dates inclusively', () => {
+			expect(isWithinRange('2026-05-01', '2026-05-01', '2026-05-05')).toBe(true);
+			expect(isWithinRange('2026-05-05', '2026-05-01', '2026-05-05')).toBe(true);
+			expect(isWithinRange('2026-05-06', '2026-05-01', '2026-05-05')).toBe(false);
+		});
+	});
+
+	describe('filterTimestampedByDateRange', () => {
+		it('filters inclusively in the requested timezone across UTC day boundaries', () => {
+			const items = [
+				{ timestamp: '2026-04-30T15:59:59.000Z', kind: 'before' },
+				{ timestamp: '2026-04-30T16:00:00.000Z', kind: 'start' },
+				{ timestamp: '2026-05-01T15:59:59.000Z', kind: 'end' },
+				{ timestamp: '2026-05-01T16:00:00.000Z', kind: 'after' },
+			];
+
+			expect(
+				filterTimestampedByDateRange(items, 'Asia/Shanghai', '2026-05-01', '2026-05-01').map(
+					(item) => item.kind,
+				),
+			).toEqual(['start', 'end']);
+		});
+	});
+}

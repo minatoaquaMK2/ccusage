@@ -249,7 +249,8 @@ function convertUsageRow(row: DevinUsageRow): TokenUsageEvent {
 		outputTokens: row.outputTokens,
 		cacheCreationInputTokens: row.cacheCreationInputTokens,
 		cacheReadInputTokens: row.cacheReadInputTokens,
-		totalTokens: row.inputTokens + row.outputTokens,
+		totalTokens:
+			row.inputTokens + row.outputTokens + row.cacheCreationInputTokens + row.cacheReadInputTokens,
 		credits: row.credits,
 	};
 }
@@ -441,7 +442,7 @@ if (import.meta.vitest != null) {
 
 				expect(result.events).toHaveLength(1);
 				expect(result.events[0]?.inputTokens).toBe(100);
-				expect(result.events[0]?.totalTokens).toBe(120);
+				expect(result.events[0]?.totalTokens).toBe(135);
 				expect(result.creditEvents).toHaveLength(1);
 				expect(result.creditEvents[0]?.credits).toBe(8);
 				expect(result.sessions.get('session-1')?.title).toBe('First session');
