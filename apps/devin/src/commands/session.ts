@@ -1,7 +1,13 @@
 import type { CreditUsageEvent, TokenUsageEvent, UsageTotals } from '../_types.ts';
 import type { UsageCostCalculator } from '../command-utils.ts';
+import { homedir } from 'node:os';
 import process from 'node:process';
-import { addEmptySeparatorRow, formatNumber, ResponsiveTable } from '@ccusage/terminal/table';
+import {
+	addEmptySeparatorRow,
+	formatDateCompact,
+	formatNumber,
+	ResponsiveTable,
+} from '@ccusage/terminal/table';
 import { define } from 'gunshi';
 import pc from 'picocolors';
 import { DEFAULT_TIMEZONE } from '../_consts.ts';
@@ -17,13 +23,17 @@ import {
 import { loadDevinUsageEvents } from '../data-loader.ts';
 import {
 	filterTimestampedByDateRange,
+	formatDisplayDate,
 	formatDisplayDateTime,
 	normalizeFilterDate,
+	toDateKey,
 } from '../date-utils.ts';
 import { log, logger } from '../logger.ts';
 import { DevinPricingSource } from '../pricing.ts';
 
-const TABLE_COLUMN_COUNT = 10;
+const TABLE_COLUMN_COUNT = 12;
+const USER_HOME_DIR = homedir();
+const MAX_DIRECTORY_DISPLAY_LENGTH = 30;
 
 type SessionSummary = ReturnType<typeof createEmptySummary> & {
 	sessionId: string;
@@ -108,6 +118,51 @@ function calculateSessionTotals(rows: SessionSummary[]): UsageTotals {
 			requests: 0,
 		},
 	);
+}
+
+function truncateMiddle(value: string, maxLength: number): string {
+	if (value.length <= maxLength) {
+		return value;
+	}
+
+	const prefixLength = Math.ceil((maxLength - 1) / 2);
+	const suffixLength = Math.floor((maxLength - 1) / 2);
+	return `${value.slice(0, prefixLength)}…${value.slice(-suffixLength)}`;
+}
+
+function formatDirectoryDisplay(workingDirectory: string): string {
+	if (workingDirectory.trim() === '') {
+		return '-';
+	}
+
+	const homeRelativeDirectory =
+		workingDirectory === USER_HOME_DIR
+			? '~'
+			: workingDirectory.startsWith(`${USER_HOME_DIR}/`)
+				? `~/${workingDirectory.slice(USER_HOME_DIR.length + 1)}`
+				: workingDirectory;
+
+	if (homeRelativeDirectory.length <= MAX_DIRECTORY_DISPLAY_LENGTH) {
+		return homeRelativeDirectory;
+	}
+
+	if (homeRelativeDirectory.startsWith('~/')) {
+		const parts = homeRelativeDirectory.slice(2).split('/').filter(Boolean);
+		const suffix = parts.slice(-2).join('/');
+		return truncateMiddle(`~/…/${suffix}`, MAX_DIRECTORY_DISPLAY_LENGTH);
+	}
+
+	const parts = homeRelativeDirectory.split('/').filter(Boolean);
+	const suffix = parts.slice(-2).join('/');
+	return truncateMiddle(`…/${suffix}`, MAX_DIRECTORY_DISPLAY_LENGTH);
+}
+
+function formatShortSessionId(sessionId: string): string {
+	if (sessionId.trim() === '') {
+		return '-';
+	}
+
+	return sessionId.length > 8 ? `…${sessionId.slice(-8)}` : sessionId;
 }
 
 export const sessionCommand = define({
@@ -215,6 +270,8 @@ export const sessionCommand = define({
 
 			const table: ResponsiveTable = new ResponsiveTable({
 				head: [
+					'Date',
+					'Directory',
 					'Session',
 					'Models',
 					'Input',
@@ -229,6 +286,8 @@ export const sessionCommand = define({
 				colAligns: [
 					'left',
 					'left',
+					'left',
+					'left',
 					'right',
 					'right',
 					'right',
@@ -238,18 +297,21 @@ export const sessionCommand = define({
 					'right',
 					'left',
 				],
-				compactHead: ['Session', 'Models', 'Input', 'Output', 'Credits', 'Cost (USD)'],
-				compactColAligns: ['left', 'left', 'right', 'right', 'right', 'right'],
+				compactHead: ['Date', 'Directory', 'Session', 'Input', 'Output', 'Credits', 'Cost (USD)'],
+				compactColAligns: ['left', 'left', 'left', 'right', 'right', 'right', 'right'],
 				compactThreshold: 100,
 				forceCompact: Boolean(ctx.values.compact),
 				style: { head: ['cyan'] },
+				dateFormatter: (dateStr: string) => formatDateCompact(dateStr),
 			});
 
 			for (const data of sessionData) {
-				const displayTitle = data.title.length > 30 ? `${data.title.slice(0, 27)}...` : data.title;
+				const dateKey = toDateKey(data.lastActivity, ctx.values.timezone);
 
 				table.push([
-					displayTitle,
+					formatDisplayDate(dateKey, ctx.values.locale, ctx.values.timezone),
+					formatDirectoryDisplay(data.workingDirectory),
+					formatShortSessionId(data.sessionId),
 					formatModelSummary(data.models),
 					formatNumber(data.inputTokens),
 					formatNumber(data.outputTokens),
@@ -264,6 +326,8 @@ export const sessionCommand = define({
 
 			addEmptySeparatorRow(table, TABLE_COLUMN_COUNT);
 			table.push([
+				'',
+				'',
 				pc.yellow('Total'),
 				'',
 				pc.yellow(formatNumber(totals.inputTokens)),
@@ -280,10 +344,40 @@ export const sessionCommand = define({
 
 			if (table.isCompactMode()) {
 				logger.info('\nRunning in Compact Mode');
-				logger.info('Expand terminal width to see cache metrics and full session fields');
+				logger.info(
+					'Expand terminal width to see directories, cache metrics, total tokens, and last activity',
+				);
 			}
 		} finally {
 			pricingSource[Symbol.dispose]();
 		}
 	},
 });
+
+if (import.meta.vitest != null) {
+	describe('formatDirectoryDisplay', () => {
+		it('uses compact home-relative directory labels', () => {
+			expect(formatDirectoryDisplay('')).toBe('-');
+			expect(formatDirectoryDisplay(USER_HOME_DIR)).toBe('~');
+			expect(formatDirectoryDisplay(`${USER_HOME_DIR}/Documents/Project`)).toBe(
+				'~/Documents/Project',
+			);
+			expect(
+				formatDirectoryDisplay(`${USER_HOME_DIR}/.local/share/cognition/cli/_versions/latest/bin`),
+			).toBe('~/…/latest/bin');
+			expect(
+				formatDirectoryDisplay(
+					'/var/folders/tmp/mission-engine-real-devin-handoff-orchestrator-11583-1776863720245950000',
+				),
+			).toHaveLength(MAX_DIRECTORY_DISPLAY_LENGTH);
+		});
+	});
+
+	describe('formatShortSessionId', () => {
+		it('matches the Codex session id display style', () => {
+			expect(formatShortSessionId('')).toBe('-');
+			expect(formatShortSessionId('short')).toBe('short');
+			expect(formatShortSessionId('58d45ee6-eeb8-4070-81a5-a3553ff6215f')).toBe('…3ff6215f');
+		});
+	});
+}
